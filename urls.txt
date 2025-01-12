@@ -1,2 +1,3 @@
-https://github.com/ianare/exif-samples/blob/master/jpg/Ricoh_Caplio_RR330.jpg
-https://ahmia.fi/about/
+https://exiv2.org/sample.html
+https://github.com/recurser/exif-orientation-examples/blob/master/Landscape_1.jpg
+https://github.com/recurser/exif-orientation-examples/blob/master/Landscape_2.jpg
