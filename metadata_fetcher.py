@@ -12,6 +12,7 @@ import datetime
 from urllib.parse import urljoin, urlparse
 import requests
 import piexif
+import exifread
 from PIL import Image
 from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
@@ -112,17 +113,36 @@ def extract_piexif(start_bytes):
         return exif_data
     return exif_data
 
+def extract_metadata_with_exif_py(start_bytes):
+    """Extract EXIF metadata using the exif-py library."""
+    exif_data = {}
+    try:
+        # Parse EXIF tags from the given image bytes
+        tags = exifread.process_file(io.BytesIO(start_bytes), details=False)
+        for tag, value in tags.items():
+            # Convert tag values to strings to ensure JSON serialization
+            exif_data[tag] = str(value)
+    except Exception:
+        return exif_data
+    #except Exception as error:
+    #    print(f"Failed to extract EXIF with exif-py: {str(error)}")
+    return exif_data
+
 def extract_metadata(start_bytes):
     """Manually extract EXIF metadata from a JPEG """
     exif_data = {}
-    exif_data = extract_pil(start_bytes)
+    exif_data = extract_metadata_with_exif_py(start_bytes)
+    if not exif_data:
+        exif_data = extract_pil(start_bytes)
     if not exif_data:
         exif_data = extract_piexif(start_bytes)
     if not exif_data:
         if b"Exif" in start_bytes: # Check for APP1 segment containing EXIF metadata
             exif_start = start_bytes.find(b"Exif") + 6 # Start after "Exif\0\0"
             start_bytes = start_bytes[exif_start:] # Extract potential EXIF segment
-            exif_data = extract_pil(start_bytes)
+            exif_data = extract_metadata_with_exif_py(start_bytes)
+            if not exif_data:
+                exif_data = extract_pil(start_bytes)
             if not exif_data:
                 exif_data = extract_piexif(start_bytes)
     return exif_data
