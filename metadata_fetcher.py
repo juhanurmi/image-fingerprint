@@ -11,6 +11,7 @@ from hashlib import sha256
 import datetime
 from urllib.parse import urljoin, urlparse
 import requests
+import piexif
 from PIL import Image
 from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
@@ -69,7 +70,7 @@ def head(resource_url):
         print(f"URL: {resource_url}")
     return {}
 
-def extract_metadata(start_bytes):
+def extract_pil(start_bytes):
     ''' Extract EXIF metadata '''
     exif_data = {}
     try:
@@ -83,9 +84,58 @@ def extract_metadata(start_bytes):
                 else:
                     value = str(value)  # Convert other types to string
                 exif_data[TAGS.get(tag, tag)] = value
-    except Exception as error:
-        print(f"Failed to extract EXIF: {str(error)}")
+    #except Exception as error:
+        #print(f"Failed to extract EXIF with PIL: {str(error)}")
+    except Exception:
+        return exif_data
     return exif_data
+
+def extract_piexif(start_bytes):
+    """Extract EXIF metadata using piexif."""
+    exif_data = {}
+    try:
+        exif_dict = piexif.load(start_bytes)
+        for ifd_name in exif_dict:
+            json_data = sanitize_for_json(exif_dict[ifd_name])
+            for tag, value in json_data.items():
+                tag_name = piexif.TAGS[ifd_name][tag]["name"]
+                # Convert bytes to strings if necessary
+                if isinstance(value, bytes):
+                    try:
+                        value = value.decode(errors="ignore")  # Attempt to decode bytes
+                    except Exception:
+                        value = str(value)  # Fallback: Convert to string representation
+                exif_data[tag_name] = value
+    #except Exception as error:
+        #print(f"Failed to extract EXIF with piexif: {str(error)}")
+    except Exception:
+        return exif_data
+    return exif_data
+
+def extract_metadata(start_bytes):
+    """Manually extract EXIF metadata from a JPEG """
+    exif_data = {}
+    exif_data = extract_pil(start_bytes)
+    if not exif_data:
+        exif_data = extract_piexif(start_bytes)
+    if not exif_data:
+        if b"Exif" in start_bytes: # Check for APP1 segment containing EXIF metadata
+            exif_start = start_bytes.find(b"Exif") + 6 # Start after "Exif\0\0"
+            start_bytes = start_bytes[exif_start:] # Extract potential EXIF segment
+            exif_data = extract_pil(start_bytes)
+            if not exif_data:
+                exif_data = extract_piexif(start_bytes)
+    return exif_data
+
+def sanitize_for_json(obj):
+    """Recursively convert non-JSON-serializable types (like bytes) to strings."""
+    if isinstance(obj, bytes):
+        return obj.decode(errors="ignore")  # Convert bytes to string
+    if isinstance(obj, dict):
+        return {key: sanitize_for_json(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(item) for item in obj]
+    return obj  # Return other types unchanged
 
 def raw_image_data(start_bytes):
     """ Extract the start of the image data """

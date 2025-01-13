@@ -1,3 +1,5 @@
 https://exiv2.org/sample.html
 https://github.com/recurser/exif-orientation-examples/blob/master/Landscape_1.jpg
 https://github.com/recurser/exif-orientation-examples/blob/master/Landscape_2.jpg
+https://raw.githubusercontent.com/ianare/exif-samples/refs/heads/master/jpg/gps/DSCN0012.jpg
+https://raw.githubusercontent.com/ianare/exif-samples/refs/heads/master/jpg/gps/DSCN0010.jpg
