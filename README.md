@@ -91,3 +91,8 @@ xxd -p img_1771.jpg | tr -d '\n' | grep -o "cb44f02d651b15cd558b9320531417c8c9cd
 
 xxd -p img_1771.jpg | tr -d '\n' | grep -o "ef4345790e09c77cf4a2e3cc14721b0143423972c493ee4d28cb372fa5712079472efdeb8f9463f31e7e95007123e51c87eb4f18501bed9a62ef9276039d389c8c9fa52602861c8f3a7863a800dcb9e2859017511bf4a407a8a2e80b4b7b8182adb8ebfde9ceaca79e41dc11d45572394218019a9f04c258b436c7a1ec6b6c73"
 ```
+
+# Handle onion addresses
+
+Install Tor and ensure the SOCKS5 proxy is available on localhost:9050.
+The software will then automatically use this Tor process for onion addresses.
