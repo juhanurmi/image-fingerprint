@@ -3,3 +3,4 @@ https://github.com/recurser/exif-orientation-examples/blob/master/Landscape_1.jp
 https://github.com/recurser/exif-orientation-examples/blob/master/Landscape_2.jpg
 https://raw.githubusercontent.com/ianare/exif-samples/refs/heads/master/jpg/gps/DSCN0012.jpg
 https://raw.githubusercontent.com/ianare/exif-samples/refs/heads/master/jpg/gps/DSCN0010.jpg
+http://pzhdfe7jraknpj2qgu5cz2u3i4deuyfwmonvzu5i3nyw4t4bmg7o5pad.onion/2024-year-in-review/index.html

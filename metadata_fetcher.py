@@ -17,13 +17,29 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
 
+def get_session_for_url(url):
+    """
+    Returns a requests session configured for the given URL.
+    If the URL is an onion address, the session will use the Tor proxy.
+    """
+    session = requests.Session()
+    parsed_url = urlparse(url)
+    if parsed_url.netloc.endswith(".onion"):
+        #print(f"Using Tor proxy for onion address: {url}")
+        session.proxies = {
+            "http": "socks5h://127.0.0.1:9050",
+            "https": "socks5h://127.0.0.1:9050",
+        }
+    return session
+
 def download_image_metadata(resource_url):
     """Fetch image metadata."""
     results = []
     if "image" in head(resource_url).get("content-type", ""): # Image link
         results = fetch_images([resource_url], resource_url)
     elif "html" in head(resource_url).get("content-type", ""): # HTML page
-        response = requests.get(resource_url, allow_redirects=True, timeout=60)
+        session = get_session_for_url(resource_url)
+        response = session.get(resource_url, allow_redirects=True, timeout=60)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch URL: {resource_url}")
         soup = BeautifulSoup(response.content, "html.parser")
@@ -45,12 +61,18 @@ def save_results(results, url):
     print(f"Metadata saved to {filepath}")
 
 def partial_download(img_url, start, end):
-    """Process images one by one."""
+    """Download a partial range of bytes from the image."""
     img_bytes = b""
     try:
-        response = requests.get(img_url, stream=True, allow_redirects=True, timeout=60,
-                                headers={"Range": f"bytes={start}-{end}"})
-        if response.status_code in [200, 206]: # 206 indicates partial content
+        session = get_session_for_url(img_url)
+        response = session.get(
+            img_url,
+            stream=True,
+            allow_redirects=True,
+            timeout=60,
+            headers={"Range": f"bytes={start}-{end}"}
+        )
+        if response.status_code in [200, 206]:  # 206 indicates partial content
             return response.content
         print(f"HTTP response code: {response.status_code}")
     except Exception as error:
@@ -59,10 +81,11 @@ def partial_download(img_url, start, end):
     return img_bytes
 
 def head(resource_url):
-    """Process images one by one."""
+    """Send a HEAD request to the resource."""
     try:
-        response = requests.head(resource_url, allow_redirects=True, timeout=60)
-        if response.status_code in [200, 206]: # 206 indicates partial content
+        session = get_session_for_url(resource_url)
+        response = session.head(resource_url, allow_redirects=True, timeout=60)
+        if response.status_code in [200, 206]:  # 206 indicates partial content
             return response.headers
         print(f"HTTP response code: {response.status_code}")
         return {}
