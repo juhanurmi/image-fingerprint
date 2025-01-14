@@ -7,8 +7,12 @@ assert MIN_IMAGE_SIZE > 20000
 PROXIES = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
 
 # Data folder
-DATA_FOLDER = "./data/" # Use the end /
+DATA_FOLDER = "./data/" # end with a "/"
 assert DATA_FOLDER.endswith("/")
+
+# Define archive directories, ensuring they end with a "/"
+ARCHIVE = ["./archive", "./sample"]  # Initial list
+ARCHIVE = [dir if dir.endswith("/") else f"{dir}/" for dir in ARCHIVE]
 
 # URL list file
 URL_FILE = "urls.txt"

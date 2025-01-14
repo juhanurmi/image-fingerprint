@@ -11,6 +11,7 @@ from hashlib import sha256
 import datetime
 from urllib.parse import urljoin, urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from glob import glob
 import requests
 import piexif
 import exifread
@@ -18,6 +19,59 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
 import settings # Import the settings from settings.py
+
+def compare_images(new_metadata, start_bytes, last_bytes):
+    """ Compare a new image to the collected images """
+    # 1. Read all JSON files from the collected metadata
+    metadata_files = glob(f'{settings.DATA_FOLDER}*/*.json')
+    # Add files from each archive directory
+    for archive_dir in settings.ARCHIVE:
+        metadata_files.extend(glob(f'{archive_dir}*/*.json'))
+    metadata_collection = []
+    for file_path in metadata_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                metadata = json.load(file)
+                metadata_collection.append(metadata)
+        except Exception as error:
+            print(f"Failed to read metadata file {file_path}: {error}")
+    # 2. Compare new metadata with the collected metadata
+    for existing_metadata in metadata_collection:
+        for metadata in existing_metadata:
+            # Check if the URL matches
+            new_url = new_metadata.get("url")
+            url_printed = False
+            if metadata.get("url") == new_url:
+                if not url_printed:
+                    print(f"Found match for: {new_url}")
+                    url_printed = True
+                print(f"URL match found: {metadata['url']}")
+            # Compare SHA256 sums
+            if metadata["sha256_first_10240_bytes"] == new_metadata["sha256_first_10240_bytes"]:
+                if not url_printed:
+                    print(f"Found match for: {new_url}")
+                    url_printed = True
+                print(f"Duplicate image detected based on start hash: {metadata['url']}")
+            if metadata["sha256_last_1024_bytes"] == new_metadata["sha256_last_1024_bytes"]:
+                if not url_printed:
+                    print(f"Found match for: {new_url}")
+                    url_printed = True
+                print(f"Duplicate image detected based on end hash: {metadata['url']}")
+            # Check if the 128-byte samples are contained within the new image's start or end bytes
+            random_128 = metadata.get("random_128_bytes_sample_start", "")
+            existing_start_sample = bytes.fromhex(random_128)
+            random_128 = metadata.get("random_128_bytes_sample_end", "")
+            existing_end_sample = bytes.fromhex(random_128)
+            if existing_start_sample in start_bytes:
+                if not url_printed:
+                    print(f"Found match for: {new_url}")
+                    url_printed = True
+                print(f"128-byte sample from start matches {metadata['url']}")
+            if existing_end_sample in last_bytes:
+                if not url_printed:
+                    print(f"Found match for: {new_url}")
+                    url_printed = True
+                print(f"128-byte sample from end matches {metadata['url']}")
 
 def get_session_for_url(url):
     """
@@ -47,11 +101,14 @@ def download_image_metadata(resource_url):
 
 def save_results(results, url):
     """Save results to JSON."""
-    if not os.path.isdir(settings.DATA_FOLDER):
-        os.makedirs(settings.DATA_FOLDER)
-    domain_main = urlparse(url).netloc.split('.')[-2]
-    if not os.path.isdir(f"{settings.DATA_FOLDER}{domain_main}"):
-        os.makedirs(f"{settings.DATA_FOLDER}{domain_main}")
+    try:
+        if not os.path.isdir(settings.DATA_FOLDER):
+            os.makedirs(settings.DATA_FOLDER)
+        domain_main = urlparse(url).netloc.split('.')[-2]
+        if not os.path.isdir(f"{settings.DATA_FOLDER}{domain_main}"):
+            os.makedirs(f"{settings.DATA_FOLDER}{domain_main}")
+    except Exception:
+        print("Some folder creation problem")
     filename = sha256(url.encode("utf-8")).hexdigest()[0:10]
     filepath = f"{settings.DATA_FOLDER}{domain_main}/{filename}.json"
     with open(filepath, "w", encoding="utf-8") as json_file:
@@ -189,12 +246,9 @@ def fetch_images(img_tags, base_url):
             executor.submit(process_image, img, base_url): img for img in img_tags[:max_images]
         }
         for future in as_completed(future_to_img):
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-            except Exception as error:
-                print(f"Error processing image: {error}")
+            result = future.result()
+            if result:
+                results.append(result)
     return results
 
 def process_image(img_tag, base_url):
@@ -220,7 +274,7 @@ def process_image(img_tag, base_url):
         sha256_first_bytes = sha256(start_bytes).hexdigest()
         sha256_last_bytes = sha256(last_bytes).hexdigest() if last_bytes else None
         end_sample = last_bytes[384:512].hex() if last_bytes else None
-        return {
+        metadata = {
             "url": img_url,
             "image_size": total_size,
             "exif": exif_data,
@@ -230,6 +284,8 @@ def process_image(img_tag, base_url):
             "random_128_bytes_sample_start": start_sample,
             "random_128_bytes_sample_end": end_sample,
         }
+        compare_images(metadata, start_bytes, last_bytes)
+        return metadata
     return None
 
 def read_urls_from_file(file_path):
@@ -253,7 +309,4 @@ if __name__ == "__main__":
     with ThreadPoolExecutor(max_workers=settings.MAX_THREADS) as exe: # Use the thread limit
         future_list = {exe.submit(download_image_metadata, url): url for url in url_list}
         for fut in as_completed(future_list):
-            try:
-                fut.result()
-            except Exception as error:
-                print(f"Error processing URL {future_list[fut]}: {error}")
+            fut.result()
