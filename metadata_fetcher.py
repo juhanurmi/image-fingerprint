@@ -10,6 +10,7 @@ import json
 from hashlib import sha256
 import datetime
 from urllib.parse import urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import piexif
 import exifread
@@ -178,42 +179,58 @@ def raw_image_data(start_bytes):
         return image_data
 
 def fetch_images(img_tags, base_url):
-    """Process images one by one."""
+    """Process images concurrently."""
     results = []
-    for img_tag in img_tags[0:30]: # Test max 30 images
-        if img_tags[0] == base_url:
-            img_url = base_url
-        else:
-            img_url = img_tag.get("src")
-        if img_url:
-            if img_url != base_url:
-                img_url = urljoin(base_url, img_url) # Resolve full image URL
-            total_size = int(head(img_url).get("Content-Length", "0"))
-            if total_size < settings.MIN_IMAGE_SIZE: # Ignore small images
-                continue
-            start_bytes = partial_download(img_url, 0, 10240) # First 10KB of the image
-            if not start_bytes:
-                continue
-            print(f"Downloaded a small sample of the image: {img_url}")
-            exif_data = extract_metadata(start_bytes)
-            start_sample = start_bytes[-128:].hex() # 128 bytes sample
-            last_bytes = partial_download(img_url, total_size - 1024, total_size - 1) #Last 1KB
-            # Generate hashes
-            sha256_first_bytes = sha256(start_bytes).hexdigest()
-            sha256_last_bytes = sha256(last_bytes).hexdigest() if last_bytes else None
-            end_sample = last_bytes[384:512].hex() # 128 bytes sample
-            # Append result
-            results.append({
-                "url": img_url,
-                "image_size": total_size,
-                "exif": exif_data,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                "sha256_first_10240_bytes": sha256_first_bytes,
-                "sha256_last_1024_bytes": sha256_last_bytes,
-                "random_128_bytes_sample_start": start_sample,
-                "random_128_bytes_sample_end": end_sample
-            })
+    max_workers = settings.MAX_THREADS  # Define the number of parallel threads
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit tasks for each image
+        max_images = settings.MAX_IMG_PER_DOMAIN
+        future_to_img = {
+            executor.submit(process_image, img, base_url): img for img in img_tags[:max_images]
+        }
+        for future in as_completed(future_to_img):
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+            except Exception as error:
+                print(f"Error processing image: {error}")
     return results
+
+def process_image(img_tag, base_url):
+    """Process a single image and return metadata."""
+    if img_tag == base_url:
+        img_url = base_url
+    else:
+        img_url = img_tag.get("src")
+    if img_url:
+        if img_url != base_url:
+            img_url = urljoin(base_url, img_url)  # Resolve full image URL
+        total_size = int(head(img_url).get("Content-Length", "0"))
+        if total_size < settings.MIN_IMAGE_SIZE:  # Ignore small images
+            return None
+        start_bytes = partial_download(img_url, 0, 10240)  # First 10KB of the image
+        if not start_bytes:
+            return None
+        print(f"Downloaded a small sample of the image: {img_url}")
+        exif_data = extract_metadata(start_bytes)
+        start_sample = start_bytes[-128:].hex()  # 128 bytes sample
+        last_bytes = partial_download(img_url, total_size - 1024, total_size - 1)  # Last 1KB
+        # Generate hashes
+        sha256_first_bytes = sha256(start_bytes).hexdigest()
+        sha256_last_bytes = sha256(last_bytes).hexdigest() if last_bytes else None
+        end_sample = last_bytes[384:512].hex() if last_bytes else None
+        return {
+            "url": img_url,
+            "image_size": total_size,
+            "exif": exif_data,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "sha256_first_10240_bytes": sha256_first_bytes,
+            "sha256_last_1024_bytes": sha256_last_bytes,
+            "random_128_bytes_sample_start": start_sample,
+            "random_128_bytes_sample_end": end_sample,
+        }
+    return None
 
 def read_urls_from_file(file_path):
     """Reads URLs from a file and returns them as a list"""
@@ -232,5 +249,11 @@ def read_urls_from_file(file_path):
         return []
 
 if __name__ == "__main__":
-    for target_url in read_urls_from_file(settings.URL_FILE):
-        download_image_metadata(target_url)
+    url_list = read_urls_from_file(settings.URL_FILE)
+    with ThreadPoolExecutor(max_workers=settings.MAX_THREADS) as exe: # Use the thread limit
+        future_list = {exe.submit(download_image_metadata, url): url for url in url_list}
+        for fut in as_completed(future_list):
+            try:
+                fut.result()
+            except Exception as error:
+                print(f"Error processing URL {future_list[fut]}: {error}")

@@ -12,3 +12,11 @@ assert DATA_FOLDER.endswith("/")
 
 # URL list file
 URL_FILE = "urls.txt"
+
+# Define the number of parallel download threads
+MAX_THREADS = 10
+assert MAX_THREADS > 0
+assert MAX_THREADS < 50
+
+# Max images per a domain to download
+MAX_IMG_PER_DOMAIN = 30
