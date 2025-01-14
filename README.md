@@ -17,6 +17,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```sh
+# Edit settings.py
 # Edit urls.txt url list, url line by line
 python metadata_fetcher.py
 ls ./data/
@@ -82,7 +83,8 @@ ls ./data/
 
 # Test images
 
-Using two random 128-byte samples (one from the start and one from the end) of an image to determine whether the image is the same is a **reasonable heuristic**, but it is not a foolproof method.
+Using two random 128-byte samples (one from the start and one from the end) of an image to determine whether the image is the same is a **reasonable heuristic**,
+but it is not a foolproof method to fingerprint the images and compare are these images duplicates.
 
 ```sh
 wget "https://exiv2.org/include/img_1771.jpg"
@@ -91,6 +93,11 @@ xxd -p img_1771.jpg | tr -d '\n' | grep -o "cb44f02d651b15cd558b9320531417c8c9cd
 
 xxd -p img_1771.jpg | tr -d '\n' | grep -o "ef4345790e09c77cf4a2e3cc14721b0143423972c493ee4d28cb372fa5712079472efdeb8f9463f31e7e95007123e51c87eb4f18501bed9a62ef9276039d389c8c9fa52602861c8f3a7863a800dcb9e2859017511bf4a407a8a2e80b4b7b8182adb8ebfde9ceaca79e41dc11d45572394218019a9f04c258b436c7a1ec6b6c73"
 ```
+
+**The raw 128-byte samples are effectively random data and do not provide a human-readable or visually interpreted representation of the image.**
+The script only processes images larger than 20 KB (20,480 bytes), two 128-byte samples (one from the start, one from the end) represent a small fraction of the total image size, less than 1.5%.
+They contain compressed image data, not raw pixel values, and are not directly interpreted as pixels.
+Depending on the compression algorithm, this may include encoded color or luminance information for specific regions of the image.
 
 # Handle onion addresses
 

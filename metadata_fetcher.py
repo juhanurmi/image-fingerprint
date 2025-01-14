@@ -16,6 +16,7 @@ import exifread
 from PIL import Image
 from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
+import settings # Import the settings from settings.py
 
 def get_session_for_url(url):
     """
@@ -25,11 +26,7 @@ def get_session_for_url(url):
     session = requests.Session()
     parsed_url = urlparse(url)
     if parsed_url.netloc.endswith(".onion"):
-        #print(f"Using Tor proxy for onion address: {url}")
-        session.proxies = {
-            "http": "socks5h://127.0.0.1:9050",
-            "https": "socks5h://127.0.0.1:9050",
-        }
+        session.proxies = settings.PROXIES
     return session
 
 def download_image_metadata(resource_url):
@@ -49,16 +46,15 @@ def download_image_metadata(resource_url):
 
 def save_results(results, url):
     """Save results to JSON."""
-    if not os.path.isdir("./data/"):
-        os.makedirs("./data/")
+    if not os.path.isdir(settings.DATA_FOLDER):
+        os.makedirs(settings.DATA_FOLDER)
     domain_main = urlparse(url).netloc.split('.')[-2]
-    if not os.path.isdir(f"./data/{domain_main}"):
-        os.makedirs(f"./data/{domain_main}")
+    if not os.path.isdir(f"{settings.DATA_FOLDER}{domain_main}"):
+        os.makedirs(f"{settings.DATA_FOLDER}{domain_main}")
     filename = sha256(url.encode("utf-8")).hexdigest()[0:10]
-    filepath = f"./data/{domain_main}/{filename}.json"
+    filepath = f"{settings.DATA_FOLDER}{domain_main}/{filename}.json"
     with open(filepath, "w", encoding="utf-8") as json_file:
         json.dump(results, json_file, indent=4)
-    print(f"Metadata saved to {filepath}")
 
 def partial_download(img_url, start, end):
     """Download a partial range of bytes from the image."""
@@ -74,11 +70,9 @@ def partial_download(img_url, start, end):
         )
         if response.status_code in [200, 206]:  # 206 indicates partial content
             return response.content
-        print(f"HTTP response code: {response.status_code}")
-    except Exception as error:
-        print(f"Partial download failed: {str(error)}")
-        print(f"Bytes={start}-{end} URL: {img_url}")
-    return img_bytes
+        return img_bytes
+    except Exception:
+        return img_bytes
 
 def head(resource_url):
     """Send a HEAD request to the resource."""
@@ -87,12 +81,9 @@ def head(resource_url):
         response = session.head(resource_url, allow_redirects=True, timeout=60)
         if response.status_code in [200, 206]:  # 206 indicates partial content
             return response.headers
-        print(f"HTTP response code: {response.status_code}")
         return {}
-    except Exception as error:
-        print(f"Head failed: {str(error)}")
-        print(f"URL: {resource_url}")
-    return {}
+    except Exception:
+        return {}
 
 def extract_pil(start_bytes):
     ''' Extract EXIF metadata '''
@@ -108,11 +99,9 @@ def extract_pil(start_bytes):
                 else:
                     value = str(value)  # Convert other types to string
                 exif_data[TAGS.get(tag, tag)] = value
-    #except Exception as error:
-        #print(f"Failed to extract EXIF with PIL: {str(error)}")
+        return exif_data
     except Exception:
         return exif_data
-    return exif_data
 
 def extract_piexif(start_bytes):
     """Extract EXIF metadata using piexif."""
@@ -130,11 +119,9 @@ def extract_piexif(start_bytes):
                     except Exception:
                         value = str(value)  # Fallback: Convert to string representation
                 exif_data[tag_name] = value
-    #except Exception as error:
-        #print(f"Failed to extract EXIF with piexif: {str(error)}")
+        return exif_data
     except Exception:
         return exif_data
-    return exif_data
 
 def extract_metadata_with_exif_py(start_bytes):
     """Extract EXIF metadata using the exif-py library."""
@@ -145,11 +132,9 @@ def extract_metadata_with_exif_py(start_bytes):
         for tag, value in tags.items():
             # Convert tag values to strings to ensure JSON serialization
             exif_data[tag] = str(value)
+        return exif_data
     except Exception:
         return exif_data
-    #except Exception as error:
-    #    print(f"Failed to extract EXIF with exif-py: {str(error)}")
-    return exif_data
 
 def extract_metadata(start_bytes):
     """Manually extract EXIF metadata from a JPEG """
@@ -188,14 +173,14 @@ def raw_image_data(start_bytes):
         image_content = io.BytesIO()
         img.save(image_content, format=img.format)
         image_data = image_content.getvalue()
-    except Exception as error:
-        print(f"Failed to extract raw image data: {str(error)}")
-    return image_data
+        return image_data
+    except Exception:
+        return image_data
 
 def fetch_images(img_tags, base_url):
     """Process images one by one."""
     results = []
-    for img_tag in img_tags:
+    for img_tag in img_tags[0:30]: # Test max 30 images
         if img_tags[0] == base_url:
             img_url = base_url
         else:
@@ -203,16 +188,13 @@ def fetch_images(img_tags, base_url):
         if img_url:
             if img_url != base_url:
                 img_url = urljoin(base_url, img_url) # Resolve full image URL
-            print(f"Processing image: {img_url}")
             total_size = int(head(img_url).get("Content-Length", "0"))
-            if total_size < 20480: # Ignore images smaller than 20KB
-                print(f"Ignore images smaller than 20480 bytes: img is {total_size} bytes")
+            if total_size < settings.MIN_IMAGE_SIZE: # Ignore small images
                 continue
-
             start_bytes = partial_download(img_url, 0, 10240) # First 10KB of the image
             if not start_bytes:
-                print("Error: no start bytes to process.")
                 continue
+            print(f"Downloaded a small sample of the image: {img_url}")
             exif_data = extract_metadata(start_bytes)
             start_sample = start_bytes[-128:].hex() # 128 bytes sample
             last_bytes = partial_download(img_url, total_size - 1024, total_size - 1) #Last 1KB
@@ -236,8 +218,11 @@ def fetch_images(img_tags, base_url):
 def read_urls_from_file(file_path):
     """Reads URLs from a file and returns them as a list"""
     try:
+        urls = []
         with open(file_path, "r", encoding="utf-8") as file:
             urls = [line.strip() for line in file if line.startswith('http')]
+        if not urls:
+            print(f"No urls in a file: {file_path}")
         return urls
     except FileNotFoundError:
         print(f"File not found: {file_path}")
@@ -247,5 +232,5 @@ def read_urls_from_file(file_path):
         return []
 
 if __name__ == "__main__":
-    for target_url in read_urls_from_file("urls.txt"):
+    for target_url in read_urls_from_file(settings.URL_FILE):
         download_image_metadata(target_url)
