@@ -17,6 +17,10 @@ ARCHIVE = [dir if dir.endswith("/") else f"{dir}/" for dir in ARCHIVE]
 # URL list file
 URL_FILE = "urls.txt"
 
+# List of local image files to test
+TEST_IMAGES_FOLDER = "./test_images/"
+assert TEST_IMAGES_FOLDER.endswith("/")
+
 # Define the number of parallel download threads
 MAX_THREADS = 10
 assert MAX_THREADS > 0

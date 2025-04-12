@@ -32,7 +32,8 @@ def compare_images(new_metadata, start_bytes, last_bytes):
         try:
             with open(file_path, "r", encoding="utf-8") as file:
                 metadata = json.load(file)
-                metadata_collection.append(metadata)
+                if metadata:
+                    metadata_collection.append(metadata)
         except Exception as error:
             print(f"Failed to read metadata file {file_path}: {error}")
     # 2. Compare new metadata with the collected metadata
@@ -101,16 +102,16 @@ def download_image_metadata(resource_url):
 
 def save_results(results, url):
     """Save results to JSON."""
-    try:
-        if not os.path.isdir(settings.DATA_FOLDER):
-            os.makedirs(settings.DATA_FOLDER)
-        domain_main = urlparse(url).netloc.split('.')[-2]
-        if not os.path.isdir(f"{settings.DATA_FOLDER}{domain_main}"):
-            os.makedirs(f"{settings.DATA_FOLDER}{domain_main}")
-    except Exception:
-        print("Some folder creation problem")
+    if url.startswith("http"):
+        main = urlparse(url).netloc.split('.')[-2]
+    else:
+        main = url.split('/')[-2]
+    if not os.path.isdir(settings.DATA_FOLDER):
+        os.makedirs(settings.DATA_FOLDER)
+    if not os.path.isdir(f"{settings.DATA_FOLDER}{main}"):
+        os.makedirs(f"{settings.DATA_FOLDER}{main}")
     filename = sha256(url.encode("utf-8")).hexdigest()[0:10]
-    filepath = f"{settings.DATA_FOLDER}{domain_main}/{filename}.json"
+    filepath = f"{settings.DATA_FOLDER}{main}/{filename}.json"
     with open(filepath, "w", encoding="utf-8") as json_file:
         json.dump(results, json_file, indent=4)
 
@@ -243,7 +244,7 @@ def fetch_images(img_tags, base_url):
         # Submit tasks for each image
         max_images = settings.MAX_IMG_PER_DOMAIN
         future_to_img = {
-            executor.submit(process_image, img, base_url): img for img in img_tags[:max_images]
+            executor.submit(process_image_url, img, base_url): img for img in img_tags[:max_images]
         }
         for future in as_completed(future_to_img):
             result = future.result()
@@ -251,8 +252,8 @@ def fetch_images(img_tags, base_url):
                 results.append(result)
     return results
 
-def process_image(img_tag, base_url):
-    """Process a single image and return metadata."""
+def process_image_url(img_tag, base_url):
+    """Process a single image URL and return metadata."""
     if img_tag == base_url:
         img_url = base_url
     else:
@@ -288,6 +289,43 @@ def process_image(img_tag, base_url):
         return metadata
     return None
 
+def process_image_file(image_path):
+    """Process a local image file and return metadata."""
+    try:
+        total_size = os.path.getsize(image_path)
+        if total_size < settings.MIN_IMAGE_SIZE: # Ignore small images
+            return None
+        with open(image_path, "rb") as file:
+            start_bytes = file.read(10240)  # First 10KB
+        if not start_bytes:
+            return None
+        exif_data = extract_metadata(start_bytes)
+        start_sample = start_bytes[-128:].hex()  # 128 bytes sample from end of start_bytes
+        with open(image_path, "rb") as file:
+            if total_size >= 1024:
+                file.seek(total_size - 1024)
+                last_bytes = file.read(1024)
+            else:
+                last_bytes = b""
+        sha256_first_bytes = sha256(start_bytes).hexdigest()
+        sha256_last_bytes = sha256(last_bytes).hexdigest() if last_bytes else None
+        end_sample = last_bytes[384:512].hex() if last_bytes and len(last_bytes) >= 512 else None
+        metadata = {
+            "url": image_path,
+            "image_size": total_size,
+            "exif": exif_data,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "sha256_first_10240_bytes": sha256_first_bytes,
+            "sha256_last_1024_bytes": sha256_last_bytes,
+            "random_128_bytes_sample_start": start_sample,
+            "random_128_bytes_sample_end": end_sample,
+        }
+        compare_images(metadata, start_bytes, last_bytes)
+        return metadata
+    except Exception as e:
+        print(f"Failed to process local image {image_path}: {e}")
+        return None
+
 def read_urls_from_file(file_path):
     """Reads URLs from a file and returns them as a list"""
     try:
@@ -305,8 +343,19 @@ def read_urls_from_file(file_path):
         return []
 
 if __name__ == "__main__":
-    url_list = read_urls_from_file(settings.URL_FILE)
-    with ThreadPoolExecutor(max_workers=settings.MAX_THREADS) as exe: # Use the thread limit
-        future_list = {exe.submit(download_image_metadata, url): url for url in url_list}
-        for fut in as_completed(future_list):
-            fut.result()
+    if settings.TEST_IMAGES_FOLDER and os.path.exists(settings.TEST_IMAGES_FOLDER):
+        images = glob(f'{settings.TEST_IMAGES_FOLDER}*')
+        if images:
+            local_image_metadata_list = []
+            for image in images:
+                metadata_item = process_image_file(image)
+                if metadata_item:
+                    local_image_metadata_list.append(metadata_item)
+            if local_image_metadata_list:
+                save_results(local_image_metadata_list, settings.TEST_IMAGES_FOLDER)
+    if settings.URL_FILE and os.path.isfile(settings.URL_FILE):
+        url_list = read_urls_from_file(settings.URL_FILE)
+        with ThreadPoolExecutor(max_workers=settings.MAX_THREADS) as exe: # Use the thread limit
+            future_list = {exe.submit(download_image_metadata, url): url for url in url_list}
+            for fut in as_completed(future_list):
+                fut.result()
