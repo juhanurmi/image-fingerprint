@@ -4,7 +4,15 @@ MIN_IMAGE_SIZE = 20480 # 20480 bytes
 assert MIN_IMAGE_SIZE > 20000
 
 # Tor SOCKS proxy for onion addresses
-PROXIES = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+PROXIES = [
+    {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"},
+    #{"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"},
+    ]
+
+#PROXIES = []
+#for port in range(15000, 15100):
+#    PROXIES.append({"http": f"socks5h://127.0.0.1:{port}",
+#                    "https": f"socks5h://127.0.0.1:{port}"})
 
 # Data folder
 DATA_FOLDER = "./data/" # end with a "/"
@@ -13,6 +21,9 @@ assert DATA_FOLDER.endswith("/")
 # Define archive directories, ensuring they end with a "/"
 ARCHIVE = ["./archive", "./sample"]  # Initial list
 ARCHIVE = [dir if dir.endswith("/") else f"{dir}/" for dir in ARCHIVE]
+
+# Only images, no HTML parsing
+HTML_PARSING = True
 
 # URL list file
 URL_FILE = "urls.txt"

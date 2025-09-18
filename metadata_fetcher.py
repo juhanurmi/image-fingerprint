@@ -7,7 +7,7 @@ Ignore small images.
 import io
 import os
 import json
-from hashlib import sha256
+from hashlib import sha256, blake2b
 import datetime
 from urllib.parse import urljoin, urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -81,16 +81,25 @@ def get_session_for_url(url):
     """
     session = requests.Session()
     parsed_url = urlparse(url)
-    if parsed_url.netloc.endswith(".onion"):
-        session.proxies = settings.PROXIES
+    domain = parsed_url.netloc
+    if domain.endswith(".onion"):
+        # Always select the same proxy for the same onion domain
+        # This will keep only one underlining Tor circuit to the onion service
+        # Onion addresses form an uniform distribution
+        # Deterministic, side-effect-free selection
+        h = blake2b(domain.encode('utf-8'), digest_size=8).digest()
+        index = int.from_bytes(h, 'big') % len(settings.PROXIES)
+        # Always select the same proxy for the same onion address
+        session.proxies = settings.PROXIES[index]
     return session
 
 def download_image_metadata(resource_url):
     """Fetch image metadata."""
     results = []
-    if "image" in head(resource_url).get("content-type", ""): # Image link
+    test_head = head(resource_url).get("content-type", "")
+    if "image" in test_head: # Image link
         results = fetch_images([resource_url], resource_url)
-    elif "html" in head(resource_url).get("content-type", ""): # HTML page
+    elif settings.HTML_PARSING and "html" in test_head: # HTML page
         session = get_session_for_url(resource_url)
         response = session.get(resource_url, allow_redirects=True, timeout=60)
         if response.status_code != 200:
