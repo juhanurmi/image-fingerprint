@@ -96,17 +96,17 @@ def get_session_for_url(url):
 def download_image_metadata(resource_url):
     """Fetch image metadata."""
     results = []
-    test_head = head(resource_url).get("content-type", "")
-    if "image" in test_head: # Image link
-        results = fetch_images([resource_url], resource_url)
-    elif settings.HTML_PARSING and "html" in test_head: # HTML page
+    test_head = head(resource_url)
+    if "image" in test_head.get("content-type", ""): # Image link
+        results = fetch_images([resource_url], resource_url, test_head)
+    elif settings.HTML_PARSING and "html" in test_head.get("content-type", ""): # HTML page
         session = get_session_for_url(resource_url)
         response = session.get(resource_url, allow_redirects=True, timeout=60)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch URL: {resource_url}")
         soup = BeautifulSoup(response.content, "html.parser")
         img_tags = soup.find_all("img")
-        results = fetch_images(img_tags, resource_url)
+        results = fetch_images(img_tags, resource_url, test_head)
     save_results(results, resource_url)
 
 def save_results(results, url):
@@ -115,10 +115,7 @@ def save_results(results, url):
         main = urlparse(url).netloc.split('.')[-2]
     else:
         main = url.split('/')[-2]
-    if not os.path.isdir(settings.DATA_FOLDER):
-        os.makedirs(settings.DATA_FOLDER)
-    if not os.path.isdir(f"{settings.DATA_FOLDER}{main}"):
-        os.makedirs(f"{settings.DATA_FOLDER}{main}")
+    os.makedirs(f"{settings.DATA_FOLDER}{main}", exist_ok=True)
     filename = sha256(url.encode("utf-8")).hexdigest()[0:10]
     filepath = f"{settings.DATA_FOLDER}{main}/{filename}.json"
     with open(filepath, "w", encoding="utf-8") as json_file:
@@ -245,15 +242,15 @@ def raw_image_data(start_bytes):
     except Exception:
         return image_data
 
-def fetch_images(img_tags, base_url):
+def fetch_images(img_tags, base_url, test_head):
     """Process images concurrently."""
     results = []
     max_workers = settings.MAX_THREADS  # Define the number of parallel threads
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit tasks for each image
-        max_images = settings.MAX_IMG_PER_DOMAIN
+        max_img = settings.MAX_IMG_PER_DOMAIN
         future_to_img = {
-            executor.submit(process_image_url, img, base_url): img for img in img_tags[:max_images]
+            executor.submit(fetch_img, img, base_url, test_head): img for img in img_tags[:max_img]
         }
         for future in as_completed(future_to_img):
             result = future.result()
@@ -261,7 +258,7 @@ def fetch_images(img_tags, base_url):
                 results.append(result)
     return results
 
-def process_image_url(img_tag, base_url):
+def fetch_img(img_tag, base_url, test_head):
     """Process a single image URL and return metadata."""
     if img_tag == base_url:
         img_url = base_url
@@ -270,7 +267,7 @@ def process_image_url(img_tag, base_url):
     if img_url:
         if img_url != base_url:
             img_url = urljoin(base_url, img_url)  # Resolve full image URL
-        total_size = int(head(img_url).get("Content-Length", "0"))
+        total_size = int(test_head.get("Content-Length", "0"))
         if total_size < settings.MIN_IMAGE_SIZE:  # Ignore small images
             return None
         start_bytes = partial_download(img_url, 0, 10240)  # First 10KB of the image
