@@ -109,14 +109,19 @@ def download_image_metadata(resource_url):
         results = fetch_images(img_tags, resource_url, test_head)
     save_results(results, resource_url)
 
-def save_results(results, url):
-    """Save results to JSON."""
+def file_path_from_url(url):
+    """File path from the URL adddress"""
     if url.startswith("http"):
         main = urlparse(url).netloc.split('.')[-2]
     else:
         main = url.split('/')[-2]
-    os.makedirs(f"{settings.DATA_FOLDER}{main}", exist_ok=True)
     filename = sha256(url.encode("utf-8")).hexdigest()[0:10]
+    return main, filename
+
+def save_results(results, url):
+    """Save results to JSON."""
+    main, filename = file_path_from_url(url)
+    os.makedirs(f"{settings.DATA_FOLDER}{main}", exist_ok=True)
     filepath = f"{settings.DATA_FOLDER}{main}/{filename}.json"
     with open(filepath, "w", encoding="utf-8") as json_file:
         json.dump(results, json_file, indent=4)
@@ -337,9 +342,16 @@ def read_urls_from_file(file_path):
     try:
         urls = []
         with open(file_path, "r", encoding="utf-8") as file:
-            urls = [line.strip() for line in file if line.startswith('http')]
+            urls = []
+            for line in file:
+                if line.startswith('http'):
+                    url = line.strip()
+                    main, filename = file_path_from_url(url)
+                    if not os.path.isfile(f"{settings.DATA_FOLDER}{main}/{filename}.json"):
+                        if not url in urls:
+                            urls.append(url)
         if not urls:
-            print(f"No urls in a file: {file_path}")
+            print(f"No new (not already scanned) URLs in a file: {file_path}")
         return urls
     except FileNotFoundError:
         print(f"File not found: {file_path}")
