@@ -60,15 +60,19 @@ def compare_images(new_metadata, start_bytes, last_bytes):
                 print(f"Duplicate image detected based on end hash: {metadata['url']}")
             # Check if the 128-byte samples are contained within the new image's start or end bytes
             random_128 = metadata.get("random_128_bytes_sample_start", "")
-            existing_start_sample = bytes.fromhex(random_128)
+            existing_start_sample = ""
+            if random_128:
+                existing_start_sample = bytes.fromhex(random_128)
             random_128 = metadata.get("random_128_bytes_sample_end", "")
-            existing_end_sample = bytes.fromhex(random_128)
-            if existing_start_sample in start_bytes:
+            existing_end_sample = ""
+            if random_128:
+                existing_end_sample = bytes.fromhex(random_128)
+            if existing_start_sample and existing_start_sample in start_bytes:
                 if not url_printed:
                     print(f"Found match for: {new_url}")
                     url_printed = True
                 print(f"128-byte sample from start matches {metadata['url']}")
-            if existing_end_sample in last_bytes:
+            if existing_end_sample and existing_end_sample in last_bytes:
                 if not url_printed:
                     print(f"Found match for: {new_url}")
                     url_printed = True
@@ -352,6 +356,8 @@ def read_urls_from_file(file_path):
                             urls.append(url)
         if not urls:
             print(f"No new (not already scanned) URLs in a file: {file_path}")
+        else:
+            print(f"Loaded {len(urls)} new URLs from a file: {file_path}")
         return urls
     except FileNotFoundError:
         print(f"File not found: {file_path}")
