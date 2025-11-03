@@ -20,7 +20,7 @@ from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
 import settings # Import the settings from settings.py
 
-def compare_images(new_metadata, start_bytes, last_bytes):
+def compare_images(new_metadata, start_bytes=None):
     """ Compare a new image to the collected images """
     # 1. Read all JSON files from the collected metadata
     metadata_files = glob(f'{settings.DATA_FOLDER}*/*.json')
@@ -48,35 +48,28 @@ def compare_images(new_metadata, start_bytes, last_bytes):
                     url_printed = True
                 print(f"URL match found: {metadata['url']}")
             # Compare SHA256 sums
-            if metadata["sha256_first_10240_bytes"] == new_metadata["sha256_first_10240_bytes"]:
+            if metadata.get("sha256_first_10240_bytes", 1) == new_metadata.get("sha256_first_10240_bytes", 2):
                 if not url_printed:
                     print(f"Found match for: {new_url}")
                     url_printed = True
                 print(f"Duplicate image detected based on start hash: {metadata['url']}")
-            if metadata["sha256_last_1024_bytes"] == new_metadata["sha256_last_1024_bytes"]:
+            # Compare etags
+            if metadata.get("etag", 1) == new_metadata.get("etag", 2):
                 if not url_printed:
                     print(f"Found match for: {new_url}")
                     url_printed = True
-                print(f"Duplicate image detected based on end hash: {metadata['url']}")
-            # Check if the 128-byte samples are contained within the new image's start or end bytes
-            random_128 = metadata.get("random_128_bytes_sample_start", "")
-            existing_start_sample = ""
-            if random_128:
-                existing_start_sample = bytes.fromhex(random_128)
-            random_128 = metadata.get("random_128_bytes_sample_end", "")
-            existing_end_sample = ""
-            if random_128:
-                existing_end_sample = bytes.fromhex(random_128)
-            if existing_start_sample and existing_start_sample in start_bytes:
-                if not url_printed:
-                    print(f"Found match for: {new_url}")
-                    url_printed = True
-                print(f"128-byte sample from start matches {metadata['url']}")
-            if existing_end_sample and existing_end_sample in last_bytes:
-                if not url_printed:
-                    print(f"Found match for: {new_url}")
-                    url_printed = True
-                print(f"128-byte sample from end matches {metadata['url']}")
+                print(f"Duplicate image detected based on etag: {metadata['etag']}")
+            # Check if the 128-byte samples are contained within the new image's start
+            if start_bytes:
+                random_128 = metadata.get("random_128_bytes_sample_start", "")
+                existing_start_sample = ""
+                if random_128:
+                    existing_start_sample = bytes.fromhex(random_128)
+                if existing_start_sample and existing_start_sample in start_bytes:
+                    if not url_printed:
+                        print(f"Found match for: {new_url}")
+                        url_printed = True
+                    print(f"128-byte sample from start matches {metadata['url']}")
 
 def get_session_for_url(url):
     """
@@ -110,7 +103,7 @@ def download_image_metadata(resource_url):
             raise Exception(f"Failed to fetch URL: {resource_url}")
         soup = BeautifulSoup(response.content, "html.parser")
         img_tags = soup.find_all("img")
-        results = fetch_images(img_tags, resource_url, test_head)
+        results = fetch_images(img_tags, resource_url)
     save_results(results, resource_url)
 
 def file_path_from_url(url):
@@ -154,7 +147,7 @@ def head(resource_url):
         session = get_session_for_url(resource_url)
         response = session.head(resource_url, allow_redirects=True, timeout=60)
         if response.status_code in [200, 206]:  # 206 indicates partial content
-            return response.headers
+            return {k.lower(): v for k, v in response.headers.items()}
         return {}
     except Exception:
         return {}
@@ -176,6 +169,17 @@ def extract_pil(start_bytes):
         return exif_data
     except Exception:
         return exif_data
+
+def clean_etag(etag):
+    """Clean etag"""
+    if not etag:
+        return None
+    etag = etag.strip()
+    if etag.startswith('W/'):
+        etag = etag[2:].strip()
+    if etag.startswith('"') and etag.endswith('"'):
+        etag = etag[1:-1]
+    return etag
 
 def extract_piexif(start_bytes):
     """Extract EXIF metadata using piexif."""
@@ -251,7 +255,7 @@ def raw_image_data(start_bytes):
     except Exception:
         return image_data
 
-def fetch_images(img_tags, base_url, test_head):
+def fetch_images(img_tags, base_url, test_head=None):
     """Process images concurrently."""
     results = []
     max_workers = settings.MAX_THREADS  # Define the number of parallel threads
@@ -267,7 +271,7 @@ def fetch_images(img_tags, base_url, test_head):
                 results.append(result)
     return results
 
-def fetch_img(img_tag, base_url, test_head):
+def fetch_img(img_tag, base_url, test_head=None):
     """Process a single image URL and return metadata."""
     if img_tag == base_url:
         img_url = base_url
@@ -276,31 +280,25 @@ def fetch_img(img_tag, base_url, test_head):
     if img_url:
         if img_url != base_url:
             img_url = urljoin(base_url, img_url)  # Resolve full image URL
-        total_size = int(test_head.get("Content-Length", "0"))
-        if total_size < settings.MIN_IMAGE_SIZE:  # Ignore small images
-            return None
-        start_bytes = partial_download(img_url, 0, 10240)  # First 10KB of the image
-        if not start_bytes:
-            return None
-        print(f"Downloaded a small sample of the image: {img_url}")
-        exif_data = extract_metadata(start_bytes)
-        start_sample = start_bytes[-128:].hex()  # 128 bytes sample
-        last_bytes = partial_download(img_url, total_size - 1024, total_size - 1)  # Last 1KB
-        # Generate hashes
-        sha256_first_bytes = sha256(start_bytes).hexdigest()
-        sha256_last_bytes = sha256(last_bytes).hexdigest() if last_bytes else None
-        end_sample = last_bytes[384:512].hex() if last_bytes else None
+        if not test_head:
+            test_head = head(img_url)
+        total_size = int(test_head.get("content-length", "0"))
         metadata = {
             "url": img_url,
             "image_size": total_size,
-            "exif": exif_data,
+            "etag": clean_etag(test_head.get("etag", "")),
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            "sha256_first_10240_bytes": sha256_first_bytes,
-            "sha256_last_1024_bytes": sha256_last_bytes,
-            "random_128_bytes_sample_start": start_sample,
-            "random_128_bytes_sample_end": end_sample,
         }
-        compare_images(metadata, start_bytes, last_bytes)
+        start_bytes = None
+        if total_size >= settings.MIN_IMAGE_SIZE:  # Ignore small images
+            start_bytes = partial_download(img_url, 0, 10240)  # First 10KB of the image
+            if start_bytes:
+                print(f"Downloaded a small sample of the image: {img_url}")
+                metadata["exif"] = extract_metadata(start_bytes)
+                metadata["sha256_first_10240_bytes"] = sha256(start_bytes).hexdigest()
+                # 128 bytes sample
+                metadata["random_128_bytes_sample_start"] = start_bytes[-128:].hex()
+        compare_images(metadata, start_bytes)
         return metadata
     return None
 
@@ -316,26 +314,16 @@ def process_image_file(image_path):
             return None
         exif_data = extract_metadata(start_bytes)
         start_sample = start_bytes[-128:].hex()  # 128 bytes sample from end of start_bytes
-        with open(image_path, "rb") as file:
-            if total_size >= 1024:
-                file.seek(total_size - 1024)
-                last_bytes = file.read(1024)
-            else:
-                last_bytes = b""
         sha256_first_bytes = sha256(start_bytes).hexdigest()
-        sha256_last_bytes = sha256(last_bytes).hexdigest() if last_bytes else None
-        end_sample = last_bytes[384:512].hex() if last_bytes and len(last_bytes) >= 512 else None
         metadata = {
             "url": image_path,
             "image_size": total_size,
             "exif": exif_data,
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "sha256_first_10240_bytes": sha256_first_bytes,
-            "sha256_last_1024_bytes": sha256_last_bytes,
             "random_128_bytes_sample_start": start_sample,
-            "random_128_bytes_sample_end": end_sample,
         }
-        compare_images(metadata, start_bytes, last_bytes)
+        compare_images(metadata, start_bytes)
         return metadata
     except Exception as e:
         print(f"Failed to process local image {image_path}: {e}")
