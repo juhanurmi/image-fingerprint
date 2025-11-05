@@ -9,6 +9,7 @@ import os
 import json
 from hashlib import sha256, blake2b
 import datetime
+import threading
 from urllib.parse import urljoin, urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
@@ -20,56 +21,75 @@ from PIL.ExifTags import TAGS
 from bs4 import BeautifulSoup
 import settings # Import the settings from settings.py
 
+METADATA_CACHE = {} # Global cache of metadata from JSON files
+METADATA_LOCK = threading.Lock()
+
+def load_all_metadata(new_metadata=None):
+    """Load all JSON metadata files only once into the global cache."""
+    global METADATA_CACHE
+    # Always protect cache operations with the lock
+    with METADATA_LOCK: # Lock
+        if METADATA_CACHE:
+            if new_metadata and not new_metadata["url"] in METADATA_CACHE:
+                METADATA_CACHE[new_metadata["url"]] = [new_metadata]
+            return METADATA_CACHE.copy()
+        # Else, download from the folder
+        metadata_files = glob(f"{settings.DATA_FOLDER}*/*.json")
+        for archive_dir in settings.ARCHIVE:
+            metadata_files.extend(glob(f"{archive_dir}*/*.json"))
+        for json_file_path in metadata_files:
+            try:
+                with open(json_file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    METADATA_CACHE[json_file_path] = data
+            except Exception as error:
+                print(f"Failed to load {json_file_path}: {error}", flush=True)
+        print(f"Loaded {len(METADATA_CACHE)} metadata files into cache.", flush=True)
+        if new_metadata and not new_metadata["url"] in METADATA_CACHE:
+            METADATA_CACHE[new_metadata["url"]] = [new_metadata]
+        # Return a shallow copy so other threads can iterate safely
+        return METADATA_CACHE.copy()
+
 def compare_images(new_metadata, start_bytes=None):
     """ Compare a new image to the collected images """
-    # 1. Read all JSON files from the collected metadata
-    metadata_files = glob(f'{settings.DATA_FOLDER}*/*.json')
-    # Add files from each archive directory
-    for archive_dir in settings.ARCHIVE:
-        metadata_files.extend(glob(f'{archive_dir}*/*.json'))
-    metadata_collection = []
-    for file_path in metadata_files:
-        try:
-            with open(file_path, "r", encoding="utf-8") as file:
-                metadata = json.load(file)
-                if metadata:
-                    metadata_collection.append(metadata)
-        except Exception as error:
-            print(f"Failed to read metadata file {file_path}: {error}")
-    # 2. Compare new metadata with the collected metadata
-    for existing_metadata in metadata_collection:
-        for metadata in existing_metadata:
+    # Compare new metadata with the collected metadata, read all JSON files
+    all_metadata = load_all_metadata(new_metadata)
+    url_printed = False
+    for file_path, metadata_list in all_metadata.items():
+        for metadata in metadata_list:
             # Check if the URL matches
             new_url = new_metadata.get("url")
-            url_printed = False
             if metadata.get("url") == new_url:
-                if not url_printed:
-                    print(f"Found match for: {new_url}")
-                    url_printed = True
-                print(f"URL match found: {metadata['url']}")
+                continue # Same URL, same image, do not compare the same images!
             # Compare SHA256 sums
             if metadata.get("sha256_first_10240_bytes", 1) == new_metadata.get("sha256_first_10240_bytes", 2):
                 if not url_printed:
-                    print(f"Found match for: {new_url}")
+                    print(f"\n{'-'*120}", flush=True)
+                    print(f"Found match for the new image:\n{new_url}\n", flush=True)
                     url_printed = True
-                print(f"Duplicate image detected based on start hash: {metadata['url']}")
+                print(f"Duplicate image based on the hash:\n\t{metadata['url']}  -->  {file_path}", flush=True)
             # Compare etags
             if metadata.get("etag", 1) == new_metadata.get("etag", 2):
                 if not url_printed:
-                    print(f"Found match for: {new_url}")
+                    print(f"\n{'-'*120}", flush=True)
+                    print(f"Found match for the new image:\n{new_url}\n", flush=True)
                     url_printed = True
-                print(f"Duplicate image detected based on etag: {metadata['etag']}")
-            # Check if the 128-byte samples are contained within the new image's start
-            if start_bytes:
-                random_128 = metadata.get("random_128_bytes_sample_start", "")
-                existing_start_sample = ""
-                if random_128:
+                print(f"Duplicate image detected based on etag:\n\t{metadata['url']}  -->  {file_path}", flush=True)
+            # Check if the 128-byte sample is within the new image's start
+            random_128 = metadata.get("random_128_bytes_sample_start", "")
+            if start_bytes and random_128:
+                # Detect if the existing sample is empty padding, mostly zeros
+                zero_ratio = random_128.count("0") / len(random_128)
+                if zero_ratio < 0.9: # it is not mostly zeros (more than 90% non-zeros)
                     existing_start_sample = bytes.fromhex(random_128)
-                if existing_start_sample and existing_start_sample in start_bytes:
-                    if not url_printed:
-                        print(f"Found match for: {new_url}")
-                        url_printed = True
-                    print(f"128-byte sample from start matches {metadata['url']}")
+                    if existing_start_sample in start_bytes:
+                        if not url_printed:
+                            print(f"\n{'-'*120}", flush=True)
+                            print(f"Found match for the new image:\n{new_url}\n", flush=True)
+                            url_printed = True
+                        print(f"128-byte sample matches:\n\t{metadata['url']}  -->  {file_path}", flush=True)
+    if url_printed:
+        print(f"{'-'*120}", flush=True)
 
 def get_session_for_url(url):
     """
@@ -92,10 +112,9 @@ def get_session_for_url(url):
 
 def download_image_metadata(resource_url):
     """Fetch image metadata."""
-    results = []
     test_head = head(resource_url)
     if "image" in test_head.get("content-type", ""): # Image link
-        results = fetch_images([resource_url], resource_url, test_head)
+        fetch_images([resource_url], resource_url, test_head)
     elif settings.HTML_PARSING and "html" in test_head.get("content-type", ""): # HTML page
         session = get_session_for_url(resource_url)
         response = session.get(resource_url, allow_redirects=True, timeout=60)
@@ -103,23 +122,22 @@ def download_image_metadata(resource_url):
             raise Exception(f"Failed to fetch URL: {resource_url}")
         soup = BeautifulSoup(response.content, "html.parser")
         img_tags = soup.find_all("img")
-        results = fetch_images(img_tags, resource_url)
-    save_results(results, resource_url)
+        fetch_images(img_tags, resource_url)
 
 def file_path_from_url(url):
     """File path from the URL adddress"""
     if url.startswith("http"):
-        main = urlparse(url).netloc.split('.')[-2]
+        folder = urlparse(url).netloc.split('.')[-2]
     else:
-        main = url.split('/')[-2]
+        folder = url.split('/')[-2]
     filename = sha256(url.encode("utf-8")).hexdigest()[0:10]
-    return main, filename
+    return folder, filename
 
 def save_results(results, url):
     """Save results to JSON."""
-    main, filename = file_path_from_url(url)
-    os.makedirs(f"{settings.DATA_FOLDER}{main}", exist_ok=True)
-    filepath = f"{settings.DATA_FOLDER}{main}/{filename}.json"
+    folder, filename = file_path_from_url(url)
+    os.makedirs(f"{settings.DATA_FOLDER}{folder}", exist_ok=True)
+    filepath = f"{settings.DATA_FOLDER}{folder}/{filename}.json"
     with open(filepath, "w", encoding="utf-8") as json_file:
         json.dump(results, json_file, indent=4)
 
@@ -269,7 +287,7 @@ def fetch_images(img_tags, base_url, test_head=None):
             result = future.result()
             if result:
                 results.append(result)
-    return results
+    save_results(results, base_url)
 
 def fetch_img(img_tag, base_url, test_head=None):
     """Process a single image URL and return metadata."""
@@ -293,7 +311,7 @@ def fetch_img(img_tag, base_url, test_head=None):
         if total_size >= settings.MIN_IMAGE_SIZE:  # Ignore small images
             start_bytes = partial_download(img_url, 0, 10240)  # First 10KB of the image
             if start_bytes:
-                print(f"Downloaded a small sample of the image: {img_url}")
+                print(f"Downloaded a small sample of the image: {img_url}", flush=True)
                 metadata["exif"] = extract_metadata(start_bytes)
                 metadata["sha256_first_10240_bytes"] = sha256(start_bytes).hexdigest()
                 # 128 bytes sample
@@ -326,7 +344,7 @@ def process_image_file(image_path):
         compare_images(metadata, start_bytes)
         return metadata
     except Exception as e:
-        print(f"Failed to process local image {image_path}: {e}")
+        print(f"Failed to process local image {image_path}: {e}", flush=True)
         return None
 
 def read_urls_from_file(file_path):
@@ -334,40 +352,49 @@ def read_urls_from_file(file_path):
     try:
         urls = []
         with open(file_path, "r", encoding="utf-8") as file:
-            urls = []
             for line in file:
                 if line.startswith('http'):
-                    url = line.strip()
-                    main, filename = file_path_from_url(url)
-                    if not os.path.isfile(f"{settings.DATA_FOLDER}{main}/{filename}.json"):
-                        if not url in urls:
-                            urls.append(url)
+                    url = line.split()[0].strip()
+                    folder, filename = file_path_from_url(url)
+                    if os.path.isfile(f"{settings.DATA_FOLDER}{folder}/{filename}.json"):
+                        continue # Already downloaded
+                    urls.append(url)
+        urls = list(set(urls))
         if not urls:
-            print(f"No new (not already scanned) URLs in a file: {file_path}")
+            print(f"No new (not already scanned) URLs in a file: {file_path}", flush=True)
         else:
-            print(f"Loaded {len(urls)} new URLs from a file: {file_path}")
+            print(f"Loaded {len(urls)} new URLs from a file: {file_path}", flush=True)
         return urls
     except FileNotFoundError:
-        print(f"File not found: {file_path}")
+        print(f"File not found: {file_path}", flush=True)
         return []
     except Exception as error:
-        print(f"Error reading file: {error}")
+        print(f"Error reading file: {error}", flush=True)
         return []
 
-if __name__ == "__main__":
+def main():
+    """ Main function """
+    if settings.ONLY_COMPARE_EXISTING_DATA:
+        all_metadata = load_all_metadata()
+        for _, metadata_list in all_metadata.items():
+            for metadata in metadata_list:
+                compare_images(metadata)
+        return
     if settings.TEST_IMAGES_FOLDER and os.path.exists(settings.TEST_IMAGES_FOLDER):
         images = glob(f'{settings.TEST_IMAGES_FOLDER}*')
-        if images:
-            local_image_metadata_list = []
-            for image in images:
-                metadata_item = process_image_file(image)
-                if metadata_item:
-                    local_image_metadata_list.append(metadata_item)
-            if local_image_metadata_list:
-                save_results(local_image_metadata_list, settings.TEST_IMAGES_FOLDER)
+        for image in images:
+            folder, filename = file_path_from_url(image)
+            if os.path.isfile(f"{settings.DATA_FOLDER}{folder}/{filename}.json"):
+                continue # Already processed
+            metadata_item = process_image_file(image)
+            if metadata_item:
+                save_results([metadata_item], image)
     if settings.URL_FILE and os.path.isfile(settings.URL_FILE):
         url_list = read_urls_from_file(settings.URL_FILE)
         with ThreadPoolExecutor(max_workers=settings.MAX_THREADS) as exe: # Use the thread limit
             future_list = {exe.submit(download_image_metadata, url): url for url in url_list}
             for fut in as_completed(future_list):
                 fut.result()
+
+if __name__ == "__main__":
+    main()

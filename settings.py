@@ -14,6 +14,9 @@ PROXIES = [ # socks5h or http or https
 #    PROXIES.append({"http": f"http://127.0.0.1:{port}",
 #                    "https": f"http://127.0.0.1:{port}"})
 
+# Run only a local existing data comparison
+ONLY_COMPARE_EXISTING_DATA = False
+
 # Data folder
 DATA_FOLDER = "./data/" # end with a "/"
 assert DATA_FOLDER.endswith("/")
@@ -35,7 +38,7 @@ assert TEST_IMAGES_FOLDER.endswith("/")
 # Define the number of parallel download threads
 MAX_THREADS = 10
 assert MAX_THREADS > 0
-assert MAX_THREADS < 50
+assert MAX_THREADS < 110
 
 # Max images per a domain to download
 MAX_IMG_PER_DOMAIN = 30
