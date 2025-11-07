@@ -97,8 +97,11 @@ def get_session_for_url(url):
     If the URL is an onion address, the session will use the Tor proxy.
     """
     session = requests.Session()
+    ua = getattr(settings, "USER_AGENT", None)
+    if ua:
+        session.headers.setdefault("User-Agent", ua)
     parsed_url = urlparse(url)
-    domain = parsed_url.netloc
+    domain = parsed_url.netloc.lower()
     if domain.endswith(".onion"):
         # Always select the same proxy for the same onion domain
         # This will keep only one underlining Tor circuit to the onion service

@@ -17,6 +17,9 @@ PROXIES = [ # socks5h or http or https
 # Run only a local existing data comparison
 ONLY_COMPARE_EXISTING_DATA = False
 
+# Typical Tor Browser
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
 # Data folder
 DATA_FOLDER = "./data/" # end with a "/"
 assert DATA_FOLDER.endswith("/")
